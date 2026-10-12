@@ -1,0 +1,9 @@
+import { useState } from 'react';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Menu, X, Landmark, ChevronRight, LogOut, UserRound } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+export default function Layout() {
+  const [open, setOpen] = useState(false); const { user, logout } = useAuth(); const navigate = useNavigate();
+  const links = [['Compare loans','/compare'],['EMI calculator','/calculator'],['Eligibility','/eligibility'],['AI advisor','/advisor'],['About','/about']];
+  return <><header className="nav-shell"><nav className="navbar container"><Link className="brand" to="/"><span className="brand-mark"><Landmark size={19}/></span><span>digital<span className="brand-accent">loan</span></span></Link><button className="mobile-menu" aria-label="Toggle navigation" onClick={()=>setOpen(!open)}>{open?<X/>:<Menu/>}</button><div className={`nav-links ${open?'show':''}`}>{links.map(([label,path])=><NavLink onClick={()=>setOpen(false)} key={path} to={path}>{label}</NavLink>)}<span className="nav-divider"/>{user?<><Link className="nav-profile" to="/dashboard"><UserRound size={15}/>{user.name.split(' ')[0]}</Link><button className="btn btn-quiet btn-sm" onClick={()=>{logout();navigate('/')}}><LogOut size={15}/> Log out</button></>:<><Link to="/login" className="nav-login">Log in</Link><Link to="/register" className="btn btn-dark btn-sm">Get started <ChevronRight size={15}/></Link></>}</div></nav></header><Outlet/><footer className="footer"><div className="container footer-inner"><div className="brand footer-brand"><span className="brand-mark"><Landmark size={18}/></span><span>digital<span className="brand-accent">loan</span></span></div><p>Tools for clearer borrowing decisions.</p><div className="footer-bottom"><span>© 2025 DigitalLoan. Academic demonstration project.</span><span>Sample products and estimates only · Not financial advice</span></div></div></footer></>;
+}

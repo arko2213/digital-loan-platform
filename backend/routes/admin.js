@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import { protect, adminOnly } from '../middleware/auth.js';
+import User from '../models/User.js';
+import Loan from '../models/Loan.js';
+import { Comparison, EligibilityCheck, Recommendation, ChatHistory } from '../models/Activity.js';
+const router = Router(); router.use(protect, adminOnly);
+router.get('/overview', async (req, res, next) => { try { const [users, loans, comparisons, checks, chats, popular] = await Promise.all([User.countDocuments(), Loan.countDocuments({ status: 'active' }), Comparison.countDocuments(), EligibilityCheck.countDocuments(), ChatHistory.countDocuments(), Comparison.aggregate([{ $unwind: '$selectedLoans' }, { $group: { _id: '$selectedLoans', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 5 }, { $lookup: { from: 'loans', localField: '_id', foreignField: '_id', as: 'loan' } }, { $unwind: '$loan' }])]); res.json({ users, loans, comparisons, checks, chats, popular }); } catch (e) { next(e); } });
+router.get('/users', async (req, res, next) => { try { const users = await User.find().select('-password').sort({ createdAt: -1 }).limit(100); res.json({ users }); } catch (e) { next(e); } });
+router.patch('/users/:id/status', async (req, res, next) => { try { const user = await User.findByIdAndUpdate(req.params.id, { disabled: Boolean(req.body.disabled) }, { new: true }).select('-password'); if (!user) return res.status(404).json({ message: 'User not found.' }); res.json({ user }); } catch (e) { next(e); } });
+router.post('/sync-live-rates', async (req, res, next) => { try { const { syncLiveLoanProducts } = await import('../services/loanSyncService.js'); const result = await syncLiveLoanProducts({ clearDemo: req.body?.clearDemo ?? false }); res.json({ message: 'Live bank rates synchronized successfully.', ...result }); } catch (e) { next(e); } });
+export default router;
