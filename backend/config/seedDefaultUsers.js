@@ -1,4 +1,6 @@
 import User from '../models/User.js';
+import Loan from '../models/Loan.js';
+import { INDIAN_BANKS_LIVE_RATES } from '../services/bankRatesService.js';
 
 export async function seedDefaultUsers() {
   try {
@@ -40,7 +42,19 @@ export async function seedDefaultUsers() {
       adminUser.role = 'admin';
       await adminUser.save();
     }
+    // 3. Ensure Loan catalog is seeded if database is fresh
+    const loanCount = await Loan.countDocuments();
+    if (loanCount === 0) {
+      const realBankProducts = INDIAN_BANKS_LIVE_RATES.map(p => ({
+        ...p,
+        isDemo: false,
+        isLiveVerified: true,
+        lastUpdated: new Date()
+      }));
+      await Loan.insertMany(realBankProducts);
+      console.log(`✅ Default loan catalog seeded (${realBankProducts.length} bank products).`);
+    }
   } catch (err) {
-    console.error('Warning: could not seed default users:', err.message);
+    console.error('Warning: could not seed default data:', err.message);
   }
 }

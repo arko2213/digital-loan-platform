@@ -46,6 +46,19 @@ app.use('/api/loans', loanRoutes);
 app.use('/api', toolRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/admin', adminRoutes);
+
+// Serve frontend static build in production
+const frontendDist = path.resolve(__dirname, '../frontend/dist');
+app.use(express.static(frontendDist));
+
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  const indexPath = path.resolve(frontendDist, 'index.html');
+  res.sendFile(indexPath, err => {
+    if (err) next();
+  });
+});
+
 app.use(notFound);
 app.use(errorHandler);
 

@@ -11,7 +11,12 @@ Requirements: Node.js 20+, MongoDB (local or Atlas), and optionally a Google Gem
 3. In another terminal: `cd frontend && npm install && npm run dev`
 4. Open the Vite URL (normally http://localhost:5173). The API runs on port 5000.
 
-The app remains usable for comparison, EMI, eligibility, and transparent rule-based recommendations when Gemini is not configured; the AI chat endpoint then returns a clear service-unavailable response rather than pretending to be AI. Register an account to use protected features. To grant admin access, set `ADMIN_EMAIL` before registering that email.
+## Deployment (Render)
+
+This platform is ready to deploy on **Render** as a single full-stack web service (Node.js Express + React frontend) with a cloud database on **MongoDB Atlas**.
+
+- Ready-to-use [`render.yaml`](./render.yaml) Blueprint included.
+- For complete step-by-step instructions (MongoDB Atlas setup, environment variables, automatic seeding, and verification), see the **[Deployment Guide](DEPLOYMENT.md)**.
 
 ## Project structure
 
