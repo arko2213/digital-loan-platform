@@ -21,7 +21,11 @@ import { notFound, errorHandler } from './middleware/errors.js';
 
 const app = express();
 app.disable('x-powered-by');
-app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  contentSecurityPolicy: false
+}));
+
 const explicitOrigins = process.env.CLIENT_ORIGIN
   ? process.env.CLIENT_ORIGIN.split(',').map(s => s.trim())
   : [];
@@ -33,6 +37,19 @@ app.use(cors({
 
     const isLocalOrLAN = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(origin);
     if (isLocalOrLAN) return callback(null, true);
+
+    try {
+      const { hostname } = new URL(origin);
+      if (
+        hostname.endsWith('.onrender.com') ||
+        hostname.endsWith('.vercel.app') ||
+        hostname.endsWith('.netlify.app')
+      ) {
+        return callback(null, true);
+      }
+    } catch {
+      // ignore malformed origins
+    }
 
     return callback(null, false);
   },
