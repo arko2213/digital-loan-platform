@@ -10,6 +10,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: "20"
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRES_IN
@@ -20,3 +22,5 @@ services:
         sync: false
       - key: NVIDIA_API_KEY
         sync: false
+      - key: NVIDIA_MODEL
+        value: nvidia/nemotron-3.5-bolt-e4b
