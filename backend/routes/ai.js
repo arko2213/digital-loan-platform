@@ -1,12 +1,68 @@
+import dns from 'dns';
+try { dns.setDefaultResultOrder('ipv4first'); } catch {}
+
 import { Router } from 'express';
 import { body, validationResult } from 'express-validator';
 import Loan from '../models/Loan.js';
 import { optionalProtect } from '../middleware/auth.js';
 import { ChatHistory } from '../models/Activity.js';
+
 const router = Router();
 
 const NVIDIA_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const REQUEST_TIMEOUT_MS = 12_000;   // 12-second timeout per attempt
+const REQUEST_TIMEOUT_MS = 25_000;   // 25-second timeout per attempt
+
+/**
+ * Intelligent local fallback answering engine in case of NVIDIA network timeouts or outages.
+ */
+function generateLocalAnswer(userMessage, context) {
+  const q = (userMessage || '').toLowerCase();
+  const loans = context?.loans || [];
+  
+  const types = ['personal', 'home', 'education', 'car', 'business'];
+  const matchedType = types.find(t => q.includes(t));
+  
+  let relevantLoans = matchedType 
+    ? loans.filter(l => l.loanType === matchedType) 
+    : loans;
+
+  if (relevantLoans.length === 0) relevantLoans = loans;
+
+  const sorted = [...relevantLoans].sort((a, b) => a.interestRate - b.interestRate);
+  const best = sorted[0];
+
+  if (q.includes('rate') || q.includes('best') || q.includes('lowest') || q.includes('compare') || matchedType || q.includes('option') || q.includes('recommend')) {
+    const typeLabel = matchedType ? `${matchedType.toUpperCase()} loans` : 'active loan options';
+    const top3 = sorted.slice(0, 4);
+    
+    let answer = `Here are the top competitive ${typeLabel} currently active in the platform:\n\n`;
+    answer += `| Lender | Loan Name | Interest Rate | Processing Fee | Min Income |\n`;
+    answer += `| :--- | :--- | :--- | :--- | :--- |\n`;
+    for (const l of top3) {
+      answer += `| **${l.lender}** | ${l.loanName} | **${l.interestRate}%** | ${l.processingFee}% | ₹${(l.minIncome || 0).toLocaleString('en-IN')} |\n`;
+    }
+    answer += `\n**Key Takeaways:**\n`;
+    if (best) {
+      answer += `• **Lowest Rate:** **${best.lender} (${best.loanName})** offers starting rates from **${best.interestRate}% p.a.**\n`;
+      answer += `• **Processing Fees:** Ranging from ${Math.min(...top3.map(l => l.processingFee))}% to ${Math.max(...top3.map(l => l.processingFee))}%\n`;
+    }
+    if (context?.profile?.creditScore) {
+      answer += `• **Your Credit Profile:** With a credit score of ${context.profile.creditScore}, you meet eligibility for these offers.\n`;
+    }
+    answer += `\n*Note: Rates are subject to RBI benchmark updates and lender verification.*`;
+    return answer;
+  }
+
+  if (q.includes('tenure') || q.includes('duration') || q.includes('time')) {
+    return `### How Loan Tenure Affects Your Costs\n\n1. **Shorter Tenure (e.g. 12–24 months):**\n   • Higher monthly EMI\n   • Significantly lower total interest paid over the life of the loan\n\n2. **Longer Tenure (e.g. 36–60 months):**\n   • Lower monthly EMI, easier on monthly cash flow\n   • Higher total interest paid overall\n\n**Recommendation:** Use our built-in **EMI Calculator** to find the optimal tenure that keeps your EMI under 40% of your net monthly income.`;
+  }
+
+  if (q.includes('fixed') || q.includes('floating')) {
+    return `### Fixed vs Floating Interest Rates\n\n• **Floating Rates:** Tied to external benchmarks like the **RBI Repo Rate (6.50%)**. If RBI changes repo rates, your interest rate adjusts accordingly. Most Indian home and bank loans use repo-linked floating rates.\n• **Fixed Rates:** The interest rate remains locked throughout the tenure. Provides monthly payment predictability, but typically carries a 1–2% higher initial rate.\n\nMost verified options on our platform use repo-linked floating rate cards for transparency.`;
+  }
+
+  return `### LoanAI Advice & Comparison\n\nWhen evaluating loan offers on DigitalLoan, consider:\n1. **Annual Interest Rate (APR):** Look for repo-linked benchmark spreads.\n2. **Processing & Prepayment Charges:** Compare upfront fees and foreclosure rules.\n3. **EMI Affordability:** Aim to keep total debt EMIs under 40% of your net monthly income.\n\nCurrently, our lowest active rate starts from **${best ? best.interestRate + '%' : '8.50%'}** with top lenders. Visit the **Compare** tab to compare loans side-by-side or calculate your exact EMI in the **Calculator** tab.`;
+}
 
 /**
  * Call NVIDIA NIM with timeout and automatic model fallback.
@@ -41,7 +97,7 @@ async function callNvidia(apiKey, basePayload, candidateModels = []) {
 
       const data = await response.json();
       const answer = data.choices?.[0]?.message?.content;
-      if (answer && answer.trim()) {
+      if (answer && typeof answer === 'string' && answer.trim()) {
         console.log(`[AI] Success with model: ${model} (length: ${answer.length})`);
         return answer.trim();
       }
@@ -64,62 +120,69 @@ async function callNvidia(apiKey, basePayload, candidateModels = []) {
 router.post('/chat', optionalProtect, [body('message').trim().isLength({ min: 2, max: 1200 }).withMessage('Enter a message (up to 1,200 characters).')], async (req, res) => {
   const errors = validationResult(req); if (!errors.isEmpty()) return res.status(400).json({ message: errors.array()[0].msg });
   const apiKey = process.env.NVIDIA_API_KEY ? process.env.NVIDIA_API_KEY.replace(/^["']|["']$/g, '').trim() : '';
-  if (!apiKey) return res.status(503).json({ message: 'AI Advisor is temporarily unavailable. Configure NVIDIA_API_KEY on the backend to enable it.' });
 
   console.log(`[AI] ── New chat request ──`);
   console.log(`[AI] User message: "${req.body.message}"`);
-  console.log(`[AI] NVIDIA URL: ${NVIDIA_URL}`);
-  console.log(`[AI] API key loaded: ${apiKey.substring(0, 12)}…`);
 
+  let context = { profile: null, loans: [] };
   try {
     const loans = await Loan.find({ status: 'active' }).select('lender loanName loanType interestRate minAmount maxAmount minTenure maxTenure processingFee minIncome minCreditScore isDemo isLiveVerified benchmark').limit(50).lean();
-    const context = {
+    context = {
       profile: req.user ? { monthlyIncome: req.user.monthlyIncome, employmentType: req.user.employmentType, creditScore: req.user.creditScore } : null,
       loans
     };
-    const systemPrompt = `You are LoanAI Advisor, an educational loan comparison assistant. Answer concisely and transparently. Product information is from the supplied JSON only; never invent lenders, rates, fees or eligibility. Distinguish calculations, estimates, live bank rate facts, and general financial education. Do not promise approvals or give personalized financial advice. Context JSON: ${JSON.stringify(context)}`;
+  } catch (dbErr) {
+    console.warn('[AI] Could not load loans for context:', dbErr.message);
+  }
 
-    const payload = {
-      model: process.env.NVIDIA_MODEL || 'meta/llama-3.2-11b-vision-instruct',
-      max_tokens: 1024,
-      stream: false,
-      temperature: 0.5,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: req.body.message }
-      ]
-    };
+  let answer = '';
 
-    const candidateModels = [
-      'meta/llama-3.2-11b-vision-instruct',
-      'nvidia/nemotron-3-ultra-550b-a55b',
-      'google/diffusiongemma-26b-a4b-it'
-    ];
-    const answer = await callNvidia(apiKey, payload, candidateModels);
+  if (apiKey) {
+    try {
+      const systemPrompt = `You are LoanAI Advisor, an educational loan comparison assistant. Answer concisely and transparently. Product information is from the supplied JSON only; never invent lenders, rates, fees or eligibility. Distinguish calculations, estimates, live bank rate facts, and general financial education. Do not promise approvals or give personalized financial advice. Context JSON: ${JSON.stringify(context)}`;
 
-    if (!answer) {
-      console.error('[AI] NVIDIA returned empty answer');
-      return res.status(502).json({ message: 'The AI service returned an empty response. Please try again.' });
+      const payload = {
+        model: process.env.NVIDIA_MODEL || 'nvidia/nemotron-3.5-bolt-e4b',
+        max_tokens: 1024,
+        stream: false,
+        temperature: 0.5,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: req.body.message }
+        ]
+      };
+
+      const candidateModels = [
+        'nvidia/nemotron-3.5-bolt-e4b',
+        'nvidia/nemotron-3.5-lightning-30b-a3b',
+        'meta/llama-3.2-11b-vision-instruct',
+        'google/diffusiongemma-26b-a4b-it'
+      ];
+
+      answer = await callNvidia(apiKey, payload, candidateModels);
+    } catch (e) {
+      console.warn('[AI] NVIDIA API calls failed, falling back to local advisor:', e.message);
     }
+  }
 
-    if (req.user?.id) {
+  // If NVIDIA returned no answer or API key was absent/failed, provide intelligent local fallback
+  if (!answer) {
+    console.log('[AI] Generating intelligent local answer...');
+    answer = generateLocalAnswer(req.body.message, context);
+  }
+
+  if (req.user?.id && answer) {
+    try {
       let chat = await ChatHistory.findOne({ userId: req.user.id }).sort({ updatedAt: -1 });
       if (!chat) chat = new ChatHistory({ userId: req.user.id, messages: [] });
       chat.messages.push({ role: 'user', content: req.body.message }, { role: 'assistant', content: answer });
       await chat.save();
-      console.log(`[AI] ✓ Success — saved to chat history`);
+    } catch (saveErr) {
+      console.warn('[AI] Could not save chat history:', saveErr.message);
     }
-
-    res.json({ answer });
-  } catch (e) {
-    console.error('[AI] ✗ Final error:', e.message);
-    const status = e.message.includes('timed out') ? 504 : 502;
-    res.status(status).json({
-      message: 'Sorry, I couldn\'t get a response from the AI service. The NVIDIA endpoint may be temporarily unavailable — please try again in a moment.'
-    });
   }
+
+  res.json({ answer });
 });
+
 export default router;

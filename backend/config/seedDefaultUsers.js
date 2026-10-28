@@ -43,10 +43,11 @@ export async function seedDefaultUsers() {
       await adminUser.save();
     }
     // 3. Ensure Loan catalog is seeded if database is fresh
-    const loanCount = await Loan.countDocuments();
+    const loanCount = await Loan.countDocuments({ status: 'active' });
     if (loanCount === 0) {
       const realBankProducts = INDIAN_BANKS_LIVE_RATES.map(p => ({
         ...p,
+        status: 'active',
         isDemo: false,
         isLiveVerified: true,
         lastUpdated: new Date()
